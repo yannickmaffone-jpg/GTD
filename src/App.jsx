@@ -75,6 +75,7 @@ const migrate = (old) => old.map((it) => {
 
 const KEY = "gtd-v4";
 const OLD = "liste-v3";
+const PEOPLE_KEY = "gtd-people-v1";
 
 /* ───────────────────────── App ───────────────────────── */
 export default function App() {
@@ -86,6 +87,9 @@ export default function App() {
   const [showF, setShowF] = useState(false);
   const [f, setF] = useState({ who: "", ctx: "", proj: "", urgent: false, stars: false, quick: false });
   const [confirmReset, setConfirmReset] = useState(false);
+  const [storedPeople, setStoredPeople] = useState([]);
+  const [whoPicker, setWhoPicker] = useState(null); // { current, onPick }
+  const [newPerson, setNewPerson] = useState("");
 
   useEffect(() => {
     const id = "montserrat";
@@ -99,10 +103,23 @@ export default function App() {
       if (raw) setItems(JSON.parse(raw));
       else { const o = localStorage.getItem(OLD); setItems(o ? migrate(JSON.parse(o)) : buildSeed()); }
     } catch (e) { setItems(buildSeed()); }
+    try {
+      const rp = localStorage.getItem(PEOPLE_KEY);
+      setStoredPeople(rp ? JSON.parse(rp) : PORTEURS.filter((p) => p && p !== "moi"));
+    } catch (e) { setStoredPeople(PORTEURS.filter((p) => p && p !== "moi")); }
     setReady(true);
   }, []);
 
   const persist = (n) => { setItems(n); try { localStorage.setItem(KEY, JSON.stringify(n)); } catch (e) {} };
+  const persistPeople = (n) => { setStoredPeople(n); try { localStorage.setItem(PEOPLE_KEY, JSON.stringify(n)); } catch (e) {} };
+  const addPerson = () => {
+    const n = newPerson.trim();
+    if (!n || n.toLowerCase() === "moi") { setNewPerson(""); return; }
+    if (!storedPeople.some((p) => p.toLowerCase() === n.toLowerCase())) persistPeople([...storedPeople, n]);
+    if (whoPicker) { whoPicker.onPick(n); setWhoPicker(null); }
+    setNewPerson("");
+  };
+  const removePerson = (name) => persistPeople(storedPeople.filter((p) => p !== name));
   const updItem = (iid, fn) => persist(items.map((it) => it.id === iid ? fn(it) : it));
 
   const cycleAttr = (o, key, arr) => {
@@ -150,6 +167,14 @@ export default function App() {
   const projects = items.filter((it) => it.kind === "project");
   const tasks = items.filter((it) => it.kind === "task");
 
+  /* Liste des intervenants : ceux enregistrés + ceux déjà utilisés dans les données */
+  const whosInData = new Set();
+  items.forEach((it) => {
+    if (it.kind === "project") it.subs.forEach((sub) => { if (sub.who && sub.who !== "moi") whosInData.add(sub.who); });
+    else if (it.leaf && it.leaf.who && it.leaf.who !== "moi") whosInData.add(it.leaf.who);
+  });
+  const people = Array.from(new Set([...storedPeople, ...whosInData])).sort((a, b) => a.localeCompare(b, "fr"));
+
   /* Toutes les tâches "à plat" avec leur contexte projet */
   const flatRows = () => {
     const rows = [];
@@ -182,12 +207,13 @@ export default function App() {
     onToggle: () => row.ref.subId ? updSub(row.ref.itemId, row.ref.subId, (x) => ({ ...x, done: !x.done })) : updAtomicLeaf(row.ref.itemId, (x) => ({ ...x, done: !x.done })),
     onDel: () => row.ref.subId ? delSub(row.ref.itemId, row.ref.subId) : delItem(row.ref.itemId),
     onAttr: (k, arr) => row.ref.subId ? updSub(row.ref.itemId, row.ref.subId, (x) => cycleAttr(x, k, arr)) : updAtomicLeaf(row.ref.itemId, (x) => cycleAttr(x, k, arr)),
+    onSetWho: (name) => row.ref.subId ? updSub(row.ref.itemId, row.ref.subId, (x) => ({ ...x, who: name })) : updAtomicLeaf(row.ref.itemId, (x) => ({ ...x, who: name })),
   });
 
   if (!ready) return <div style={s.root(th)}><style>{css}</style></div>;
 
   /* ── Carte tâche ── */
-  const LeafRow = ({ lf, title, editId, atomic, subLabel, onRename, onToggle, onDel, onAttr }) => (
+  const LeafRow = ({ lf, title, editId, atomic, subLabel, onRename, onToggle, onDel, onAttr, onSetWho }) => (
     <div style={atomic ? s.leafCardAtom : s.leafCard}>
       <div style={s.leafTop}>
         <button onClick={onToggle} style={s.checkBtn}><Box d={lf.done} /></button>
@@ -195,7 +221,7 @@ export default function App() {
         <button style={s.del} onClick={onDel}>×</button>
       </div>
       <div style={s.chips}>
-        <button style={chip(lf.who && lf.who !== "", th)} onClick={() => onAttr("who", PORTEURS)}>
+        <button style={chip(lf.who && lf.who !== "", th)} onClick={() => setWhoPicker({ current: lf.who, onPick: onSetWho })}>
           {lf.who ? (lf.who === "moi" ? "🙋 moi" : `👤 ${lf.who}`) : "+ qui"}
         </button>
         <button style={chip(lf.ctx !== "", th)} onClick={() => onAttr("ctx", CTX)}>{CTX_ICON[lf.ctx]}</button>
@@ -259,7 +285,8 @@ export default function App() {
               <label style={s.fLabel}>Intervenant
                 <select value={f.who} onChange={(e) => setF({ ...f, who: e.target.value })} style={s.select}>
                   <option value="">Tout le monde</option>
-                  {PORTEURS.filter(Boolean).map((p) => <option key={p} value={p}>{p === "moi" ? "Moi" : p}</option>)}
+                  <option value="moi">Moi</option>
+                  {people.map((p) => <option key={p} value={p}>{p}</option>)}
                 </select>
               </label>
               <label style={s.fLabel}>Lieu
@@ -318,7 +345,8 @@ export default function App() {
                       onRename={(v) => updSub(it.id, sub.id, (x) => ({ ...x, t: v }))}
                       onToggle={() => updSub(it.id, sub.id, (x) => ({ ...x, done: !x.done }))}
                       onDel={() => delSub(it.id, sub.id)}
-                      onAttr={(k, arr) => updSub(it.id, sub.id, (x) => cycleAttr(x, k, arr))} />
+                      onAttr={(k, arr) => updSub(it.id, sub.id, (x) => cycleAttr(x, k, arr))}
+                      onSetWho={(name) => updSub(it.id, sub.id, (x) => ({ ...x, who: name }))} />
                   ))}
                   {!anyFilter && <button style={{ ...s.addSub, color: th.color }} onClick={() => addSub(it.id)}>+ sous-tâche</button>}
                 </div>
@@ -371,6 +399,33 @@ export default function App() {
       {tab === "rapide" && <button style={{ ...s.addItem, borderColor: th.color, color: th.color }} onClick={() => addTask("rapide")}>+ Ajouter une tâche rapide</button>}
       {tab === "inbox"  && <button style={{ ...s.addItem, borderColor: th.color, color: th.color }} onClick={() => addTask("inbox")}>+ Nouvelle note / idée</button>}
       {tab === "suivre" && <div style={s.hint}>Cet onglet regroupe automatiquement tout ce qui est délégué à quelqu'un d'autre que toi.</div>}
+
+      {/* Sélecteur d'intervenant */}
+      {whoPicker && (
+        <div style={s.overlay} onClick={() => { setWhoPicker(null); setNewPerson(""); }}>
+          <div style={s.modal} onClick={(e) => e.stopPropagation()}>
+            <div style={s.modalTitle}>Qui s'en occupe ?</div>
+            <div style={s.peopleGrid}>
+              <button style={pill(whoPicker.current === "moi")} onClick={() => { whoPicker.onPick("moi"); setWhoPicker(null); }}>🙋 moi</button>
+              {people.map((p) => (
+                <span key={p} style={s.peopleItem}>
+                  <button style={pill(whoPicker.current === p)} onClick={() => { whoPicker.onPick(p); setWhoPicker(null); }}>👤 {p}</button>
+                  {storedPeople.includes(p) && <button style={s.pRemove} title="Supprimer de la liste" onClick={() => removePerson(p)}>×</button>}
+                </span>
+              ))}
+            </div>
+            <div style={s.addPerson}>
+              <input value={newPerson} onChange={(e) => setNewPerson(e.target.value)} placeholder="Nouvel intervenant…" style={s.pInput}
+                onKeyDown={(e) => { if (e.key === "Enter") addPerson(); }} autoFocus />
+              <button style={{ ...s.pAdd, background: th.grad }} onClick={addPerson}>Ajouter</button>
+            </div>
+            <div style={s.modalActions}>
+              <button style={s.mClear} onClick={() => { whoPicker.onPick(""); setWhoPicker(null); }}>Personne / effacer</button>
+              <button style={s.mClose} onClick={() => { setWhoPicker(null); setNewPerson(""); }}>Fermer</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -413,6 +468,12 @@ const chip = (on, th) => ({
   fontFamily: font, fontSize: 11, fontWeight: 600, letterSpacing: 0.2, padding: "5px 10px", borderRadius: 999,
   border: `1.5px solid ${on ? th.color : C.line}`, color: on ? th.color : C.muted,
   background: on ? `${th.color}12` : C.card, whiteSpace: "nowrap",
+});
+
+const pill = (on) => ({
+  fontFamily: font, fontSize: 13, fontWeight: 700, padding: "9px 13px", borderRadius: 999,
+  border: `1.5px solid ${on ? C.indigo : C.line}`, color: on ? C.indigo : C.text,
+  background: on ? `${C.indigo}14` : C.card2, whiteSpace: "nowrap",
 });
 
 const st = {
@@ -479,4 +540,17 @@ const s = {
   addItem: { width: "100%", marginTop: 14, fontSize: 14, fontWeight: 700, border: `2px dashed`, borderRadius: 16, padding: "15px", background: C.card },
   hint: { marginTop: 14, fontSize: 12.5, fontWeight: 500, color: C.muted, textAlign: "center", lineHeight: 1.5, padding: "0 20px" },
   empty: { textAlign: "center", color: C.faint, fontSize: 13.5, fontWeight: 500, padding: "40px 20px", lineHeight: 1.5 },
+
+  overlay: { position: "fixed", inset: 0, background: "rgba(16,17,40,.45)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 50, padding: 12 },
+  modal: { width: "100%", maxWidth: 460, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 20, padding: 18, boxShadow: "0 -8px 40px rgba(16,17,40,.25)" },
+  modalTitle: { fontSize: 16, fontWeight: 800, marginBottom: 14, color: C.text },
+  peopleGrid: { display: "flex", flexWrap: "wrap", gap: 8, maxHeight: 220, overflowY: "auto" },
+  peopleItem: { display: "inline-flex", alignItems: "center", gap: 3 },
+  pRemove: { color: C.faint, fontSize: 17, width: 20, height: 20, display: "grid", placeItems: "center", lineHeight: 1 },
+  addPerson: { display: "flex", gap: 8, marginTop: 16 },
+  pInput: { flex: 1, background: C.card, color: C.text, border: `1.5px solid ${C.line}`, borderRadius: 11, padding: "11px 13px", fontSize: 14, fontWeight: 600 },
+  pAdd: { flexShrink: 0, color: "#fff", fontSize: 13.5, fontWeight: 800, borderRadius: 11, padding: "0 18px" },
+  modalActions: { display: "flex", justifyContent: "space-between", marginTop: 16 },
+  mClear: { fontSize: 13, fontWeight: 700, color: C.red },
+  mClose: { fontSize: 13, fontWeight: 700, color: C.muted },
 };
