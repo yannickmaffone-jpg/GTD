@@ -90,6 +90,7 @@ export default function App() {
   const [storedPeople, setStoredPeople] = useState([]);
   const [whoPicker, setWhoPicker] = useState(null); // { current, onPick }
   const [newPerson, setNewPerson] = useState("");
+  const dragRef = useRef({ active: false });
 
   useEffect(() => {
     const id = "montserrat";
@@ -210,12 +211,72 @@ export default function App() {
     onSetWho: (name) => row.ref.subId ? updSub(row.ref.itemId, row.ref.subId, (x) => ({ ...x, who: name })) : updAtomicLeaf(row.ref.itemId, (x) => ({ ...x, who: name })),
   });
 
+  /* ── glisser-déposer (souris + tactile), sans re-render pendant le drag ── */
+  const reorderItems = (id, targetId, before) => {
+    const arr = [...items];
+    const from = arr.findIndex((x) => x.id === id);
+    if (from < 0) return;
+    const [m] = arr.splice(from, 1);
+    let to = arr.findIndex((x) => x.id === targetId);
+    if (to < 0) { persist([...arr, m]); return; }
+    if (!before) to += 1;
+    arr.splice(to, 0, m);
+    persist(arr);
+  };
+  const reorderSub = (projId, id, targetId, before) => updItem(projId, (it) => {
+    const arr = [...it.subs];
+    const from = arr.findIndex((x) => x.id === id);
+    if (from < 0) return it;
+    const [m] = arr.splice(from, 1);
+    let to = arr.findIndex((x) => x.id === targetId);
+    if (to < 0) return { ...it, subs: [...arr, m] };
+    if (!before) to += 1;
+    arr.splice(to, 0, m);
+    return { ...it, subs: arr };
+  });
+  const startDrag = (e, scope, id, projId) => {
+    e.preventDefault();
+    const el = e.currentTarget.closest("[data-drag-id]");
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+    if (el) el.style.opacity = "0.4";
+    dragRef.current = { active: true, scope, id, projId, el, lastTarget: null, before: false, targetId: null };
+  };
+  const onDragMove = (e) => {
+    const d = dragRef.current;
+    if (!d.active) return;
+    const accent = tabOf(tab).color;
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    const t = under && under.closest("[data-drag-id]");
+    if (d.lastTarget && d.lastTarget !== t) { d.lastTarget.style.boxShadow = ""; d.lastTarget = null; }
+    if (!t || t === d.el || t.getAttribute("data-drag-scope") !== d.scope) { d.targetId = null; return; }
+    const r = t.getBoundingClientRect();
+    const before = e.clientY < r.top + r.height / 2;
+    t.style.boxShadow = before ? `inset 0 3px 0 ${accent}` : `inset 0 -3px 0 ${accent}`;
+    d.lastTarget = t; d.before = before; d.targetId = t.getAttribute("data-drag-id");
+  };
+  const endDrag = () => {
+    const d = dragRef.current;
+    if (d.el) d.el.style.opacity = "";
+    if (d.lastTarget) d.lastTarget.style.boxShadow = "";
+    if (d.active && d.targetId && d.targetId !== d.id) {
+      if (d.scope === "item") reorderItems(d.id, d.targetId, d.before);
+      else reorderSub(d.projId, d.id, d.targetId, d.before);
+    }
+    dragRef.current = { active: false };
+  };
+  const handleProps = (scope, id, projId) => ({
+    onPointerDown: (e) => startDrag(e, scope, id, projId),
+    onPointerMove: onDragMove, onPointerUp: endDrag, onPointerCancel: endDrag,
+    style: s.handle, title: "Glisser pour réordonner",
+  });
+
   if (!ready) return <div style={s.root(th)}><style>{css}</style></div>;
 
   /* ── Carte tâche ── */
-  const LeafRow = ({ lf, title, editId, atomic, subLabel, onRename, onToggle, onDel, onAttr, onSetWho }) => (
-    <div style={atomic ? s.leafCardAtom : s.leafCard}>
+  const LeafRow = ({ lf, title, editId, atomic, subLabel, dragScope, dragId, dragPid, onRename, onToggle, onDel, onAttr, onSetWho }) => (
+    <div style={atomic ? s.leafCardAtom : s.leafCard} data-drag-id={dragScope ? dragId : undefined} data-drag-scope={dragScope || undefined}>
       <div style={s.leafTop}>
+        {dragScope && <button {...handleProps(dragScope, dragId, dragPid)}>⠿</button>}
         <button onClick={onToggle} style={s.checkBtn}><Box d={lf.done} /></button>
         <Editable id={editId} value={title} editing={editing} setEditing={setEditing} onSave={onRename} done={lf.done} bold={atomic} />
         <button style={s.del} onClick={onDel}>×</button>
@@ -327,8 +388,9 @@ export default function App() {
           const done = it.subs.filter((x) => x.done).length;
           const isOpen = anyFilter ? true : it.open;
           return (
-            <div key={it.id} style={s.group}>
+            <div key={it.id} style={s.group} data-drag-id={!anyFilter ? it.id : undefined} data-drag-scope={!anyFilter ? "item" : undefined}>
               <div style={s.projHead}>
+                {!anyFilter && <button {...handleProps("item", it.id)}>⠿</button>}
                 <button onClick={() => toggleOpen(it.id)} style={s.checkBtn}>
                   <span style={{ ...s.ring, borderColor: done === it.subs.length && it.subs.length ? C.green : done > 0 ? th.color : C.line }}>
                     {done === it.subs.length && it.subs.length ? "✓" : ""}</span>
@@ -342,6 +404,7 @@ export default function App() {
                 <div style={s.subsWrap}>
                   {shown.map(({ sub }) => (
                     <LeafRow key={sub.id} lf={sub} title={sub.t} editId={sub.id}
+                      dragScope={!anyFilter ? `sub-${it.id}` : undefined} dragId={sub.id} dragPid={it.id}
                       onRename={(v) => updSub(it.id, sub.id, (x) => ({ ...x, t: v }))}
                       onToggle={() => updSub(it.id, sub.id, (x) => ({ ...x, done: !x.done }))}
                       onDel={() => delSub(it.id, sub.id)}
@@ -361,7 +424,8 @@ export default function App() {
           const rows = flatRows().filter((r) => r.bucket === "rapide").filter((r) => !anyFilter || (match(r.leaf, r.title) && !f.proj));
           if (rows.length === 0) return <Empty t={anyFilter ? "Aucune tâche rapide ne correspond." : "Aucune tâche rapide."} />;
           return rows.map((row) => (
-            <LeafRow key={row.editId} lf={row.leaf} title={row.title} editId={row.editId} atomic subLabel="· tâche isolée" {...rowCbs(row)} />
+            <LeafRow key={row.editId} lf={row.leaf} title={row.title} editId={row.editId} atomic subLabel="· tâche isolée"
+              dragScope={!anyFilter ? "item" : undefined} dragId={row.ref.itemId} {...rowCbs(row)} />
           ));
         })()}
 
@@ -383,7 +447,8 @@ export default function App() {
           if (rows.length === 0) return <Empty t={anyFilter ? "Aucune note pour ces critères." : "Inbox vide. Balance tes idées ici 👇"} />;
           return rows.map((row) => (
             <div key={row.editId}>
-              <LeafRow lf={row.leaf} title={row.title} editId={row.editId} atomic {...rowCbs(row)} />
+              <LeafRow lf={row.leaf} title={row.title} editId={row.editId} atomic
+                dragScope={!anyFilter ? "item" : undefined} dragId={row.ref.itemId} {...rowCbs(row)} />
               <div style={s.triage}>
                 <span style={s.triageLbl}>Trier →</span>
                 <button style={s.triBtn} onClick={() => toBucket(row.ref.itemId, "rapide")}>⚡ Rapide</button>
@@ -519,6 +584,7 @@ const s = {
   group: { background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, overflow: "hidden", boxShadow: "0 1px 3px rgba(20,22,50,.04)" },
   projHead: { display: "flex", alignItems: "center", gap: 10, padding: "13px 11px 13px 13px", minHeight: 52 },
   checkBtn: { flexShrink: 0, display: "grid", placeItems: "center" },
+  handle: { flexShrink: 0, color: C.faint, fontSize: 17, lineHeight: 1, padding: "0 2px", cursor: "grab", touchAction: "none", userSelect: "none", WebkitUserSelect: "none" },
   ring: { width: 23, height: 23, borderRadius: "50%", border: "2.5px solid", display: "grid", placeItems: "center", fontSize: 12, color: C.green, fontWeight: 800 },
   frac: { fontSize: 12, fontWeight: 800, flexShrink: 0 },
   iconBtn: { flexShrink: 0, display: "grid", placeItems: "center", width: 20 },
