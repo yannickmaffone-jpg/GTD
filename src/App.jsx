@@ -11,7 +11,7 @@ const C = {
 
 /* Un onglet = une identité couleur (dégradés pétants) */
 const TABS = [
-  { key: "projet", label: "Projet",   icon: "📁", color: C.indigo, grad: "linear-gradient(135deg,#6366F1,#8B5CF6)" },
+  { key: "projet", label: "Projets",  icon: "📁", color: C.indigo, grad: "linear-gradient(135deg,#6366F1,#8B5CF6)" },
   { key: "rapide", label: "Rapide",   icon: "⚡", color: C.teal,   grad: "linear-gradient(135deg,#06B6D4,#0D9488)" },
   { key: "suivre", label: "À suivre", icon: "👀", color: C.pink,   grad: "linear-gradient(135deg,#EC4899,#DB2777)" },
   { key: "inbox",  label: "Inbox",    icon: "📥", color: C.amber,  grad: "linear-gradient(135deg,#F59E0B,#F97316)" },
@@ -24,7 +24,9 @@ const CTX_ICON = { "": "+ lieu", Maison: "🏠 Maison", Bureau: "💼 Bureau", O
 const MAX = 3; // étoiles & éclairs : 0 à 3
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-const leaf = (t, who = "") => ({ id: uid(), t, done: false, who, ctx: "", stars: 0, urgent: 0, quick5: false });
+const leaf = (t, who = "") => ({ id: uid(), t, done: false, who, ctx: "", stars: 0, urgent: 0, quick5: false, due: "" });
+const fmtDate = (iso) => { if (!iso) return ""; const p = iso.split("-"); return `${p[2]}/${p[1]}`; };
+const progColor = (p) => (p >= 100 ? "#10B981" : p >= 50 ? "#F59E0B" : p > 0 ? "#F97316" : "#CBD0E0");
 
 /* ───────────────────────── Données de départ ───────────────────────── */
 const SEED = [
@@ -209,6 +211,7 @@ export default function App() {
     onDel: () => row.ref.subId ? delSub(row.ref.itemId, row.ref.subId) : delItem(row.ref.itemId),
     onAttr: (k, arr) => row.ref.subId ? updSub(row.ref.itemId, row.ref.subId, (x) => cycleAttr(x, k, arr)) : updAtomicLeaf(row.ref.itemId, (x) => cycleAttr(x, k, arr)),
     onSetWho: (name) => row.ref.subId ? updSub(row.ref.itemId, row.ref.subId, (x) => ({ ...x, who: name })) : updAtomicLeaf(row.ref.itemId, (x) => ({ ...x, who: name })),
+    onSet: (patch) => row.ref.subId ? updSub(row.ref.itemId, row.ref.subId, (x) => ({ ...x, ...patch })) : updAtomicLeaf(row.ref.itemId, (x) => ({ ...x, ...patch })),
   });
 
   /* ── glisser-déposer (souris + tactile), sans re-render pendant le drag ── */
@@ -273,19 +276,22 @@ export default function App() {
   if (!ready) return <div style={s.root(th)}><style>{css}</style></div>;
 
   /* ── Carte tâche ── */
-  const LeafRow = ({ lf, title, editId, atomic, subLabel, dragScope, dragId, dragPid, onRename, onToggle, onDel, onAttr, onSetWho }) => (
+  const LeafRow = ({ lf, title, editId, atomic, subLabel, dragScope, dragId, dragPid, onRename, onToggle, onDel, onAttr, onSetWho, onSet }) => (
     <div style={atomic ? s.leafCardAtom : s.leafCard} data-drag-id={dragScope ? dragId : undefined} data-drag-scope={dragScope || undefined}>
       <div style={s.leafTop}>
         {dragScope && <button {...handleProps(dragScope, dragId, dragPid)}>⠿</button>}
         <button onClick={onToggle} style={s.checkBtn}><Box d={lf.done} /></button>
         <Editable id={editId} value={title} editing={editing} setEditing={setEditing} onSave={onRename} done={lf.done} bold={atomic} />
-        <button style={s.del} onClick={onDel}>×</button>
+        <button style={s.del} onClick={onDel} title="Supprimer">×</button>
       </div>
       <div style={s.chips}>
         <button style={chip(lf.who && lf.who !== "", th)} onClick={() => setWhoPicker({ current: lf.who, onPick: onSetWho })}>
           {lf.who ? (lf.who === "moi" ? "🙋 moi" : `👤 ${lf.who}`) : "+ qui"}
         </button>
         <button style={chip(lf.ctx !== "", th)} onClick={() => onAttr("ctx", CTX)}>{CTX_ICON[lf.ctx]}</button>
+        <label style={{ ...chip(!!lf.due, th), display: "inline-flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+          📅<input type="date" value={lf.due || ""} onChange={(e) => onSet({ due: e.target.value })} style={s.dateInput} />
+        </label>
         <button style={chip(lf.stars > 0, th)} onClick={() => onAttr("stars", null)}>{lf.stars > 0 ? "★".repeat(lf.stars) : "★ 0"}</button>
         <button style={{ ...chip(lf.urgent > 0, th), color: lf.urgent >= 3 ? C.red : lf.urgent > 0 ? C.amber : C.muted, borderColor: lf.urgent >= 3 ? C.red : lf.urgent > 0 ? C.amber : C.line }}
           onClick={() => onAttr("urgent", null)}>{lf.urgent > 0 ? "⚡".repeat(lf.urgent) : "⚡ 0"}</button>
@@ -386,6 +392,7 @@ export default function App() {
           const shown = anyFilter ? rows.filter((r) => r.ok && projMatch) : rows;
           if (anyFilter && shown.length === 0) return null;
           const done = it.subs.filter((x) => x.done).length;
+          const ppct = it.subs.length ? Math.round((done / it.subs.length) * 100) : 0;
           const isOpen = anyFilter ? true : it.open;
           return (
             <div key={it.id} style={s.group} data-drag-id={!anyFilter ? it.id : undefined} data-drag-scope={!anyFilter ? "item" : undefined}>
@@ -400,6 +407,19 @@ export default function App() {
                 <button style={s.iconBtn} onClick={() => toggleOpen(it.id)}><span style={{ ...s.chev, transform: isOpen ? "rotate(90deg)" : "none" }}>›</span></button>
                 <button style={s.del} onClick={() => delItem(it.id)}>×</button>
               </div>
+
+              {/* dates du projet + avancement */}
+              <div style={s.projMeta}>
+                <div style={s.projDates}>
+                  <label style={s.dateField}>📅 Début<input type="date" value={it.start || ""} onChange={(e) => updItem(it.id, (x) => ({ ...x, start: e.target.value }))} style={s.dateInput} /></label>
+                  <label style={s.dateField}>🏁 Fin<input type="date" value={it.end || ""} onChange={(e) => updItem(it.id, (x) => ({ ...x, end: e.target.value }))} style={s.dateInput} /></label>
+                </div>
+                <div style={s.projBarRow}>
+                  <div style={s.projBar}><div style={{ ...s.projFill, width: `${ppct}%`, background: progColor(ppct) }} /></div>
+                  <span style={{ ...s.projPct, color: progColor(ppct) }}>{ppct}%</span>
+                </div>
+              </div>
+
               {isOpen && (
                 <div style={s.subsWrap}>
                   {shown.map(({ sub }) => (
@@ -409,7 +429,8 @@ export default function App() {
                       onToggle={() => updSub(it.id, sub.id, (x) => ({ ...x, done: !x.done }))}
                       onDel={() => delSub(it.id, sub.id)}
                       onAttr={(k, arr) => updSub(it.id, sub.id, (x) => cycleAttr(x, k, arr))}
-                      onSetWho={(name) => updSub(it.id, sub.id, (x) => ({ ...x, who: name }))} />
+                      onSetWho={(name) => updSub(it.id, sub.id, (x) => ({ ...x, who: name }))}
+                      onSet={(patch) => updSub(it.id, sub.id, (x) => ({ ...x, ...patch }))} />
                   ))}
                   {!anyFilter && <button style={{ ...s.addSub, color: th.color }} onClick={() => addSub(it.id)}>+ sous-tâche</button>}
                 </div>
@@ -509,7 +530,7 @@ function Editable({ id, value, editing, setEditing, onSave, done, bold }) {
   );
   return (
     <span onClick={() => setEditing(id)} style={{ ...st.txt, fontWeight: bold ? 700 : 500,
-      color: done ? C.faint : C.text, textDecoration: done ? "line-through" : "none" }}>{value || <em style={{ color: C.faint }}>sans titre…</em>}</span>
+      color: done ? C.muted : C.text, textDecoration: "none" }}>{value || <em style={{ color: C.faint }}>sans titre…</em>}</span>
   );
 }
 
@@ -590,6 +611,15 @@ const s = {
   iconBtn: { flexShrink: 0, display: "grid", placeItems: "center", width: 20 },
   chev: { fontSize: 22, color: C.muted, transition: "transform .2s ease", lineHeight: 1 },
   del: { flexShrink: 0, color: C.faint, fontSize: 21, width: 24, height: 24, display: "grid", placeItems: "center", lineHeight: 1 },
+
+  projMeta: { padding: "0 13px 12px 13px", display: "flex", flexDirection: "column", gap: 9 },
+  projDates: { display: "flex", flexWrap: "wrap", gap: 8 },
+  dateField: { display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, color: C.muted, background: C.card2, border: `1.5px solid ${C.line}`, borderRadius: 999, padding: "5px 11px", cursor: "pointer" },
+  dateInput: { border: "none", background: "transparent", fontFamily: font, fontSize: 11.5, fontWeight: 700, color: C.text, padding: 0, width: 108, cursor: "pointer" },
+  projBarRow: { display: "flex", alignItems: "center", gap: 10 },
+  projBar: { flex: 1, height: 7, background: C.card2, borderRadius: 5, overflow: "hidden" },
+  projFill: { height: "100%", borderRadius: 5, transition: "width .35s ease, background .3s ease" },
+  projPct: { fontSize: 12, fontWeight: 800, flexShrink: 0, minWidth: 34, textAlign: "right" },
 
   subsWrap: { borderTop: `1px solid ${C.line}`, padding: "8px 9px 9px", background: C.card2 },
   leafCard: { background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: "11px 11px 9px", marginBottom: 7 },
